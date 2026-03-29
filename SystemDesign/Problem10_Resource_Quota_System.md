@@ -234,16 +234,16 @@ With reservation:
 │                         QUOTA SERVICE                             │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
-│   Quota API                    Quota Enforcement Service         │
-│   ┌─────────────────────┐     ┌─────────────────────────────┐   │
-│   │ POST /quota/reserve │────▶│ - Check limit               │   │
-│   │ POST /quota/commit  │     │ - Reserve atomically        │   │
-│   │ POST /quota/release │     │ - Warn at soft limit (80%)  │   │
-│   └─────────────────────┘     │ - Block at hard limit       │   │
-│                                └─────────────────────────────┘   │
-│                                             │                     │
-│                    ┌────────────────────────┼────────────────┐   │
-│                    ▼                        ▼                ▼   │
+│   API Endpoints                       What it does               │
+│   ┌─────────────────────┐            ┌─────────────────────┐    │
+│   │ POST /quota/reserve │───────────▶│ - Check limit       │    │
+│   │ POST /quota/commit  │            │ - Reserve atomically│    │
+│   │ POST /quota/release │            │ - Warn at 80%       │    │
+│   └─────────────────────┘            │ - Block at 100%     │    │
+│                                       └──────────┬──────────┘    │
+│                                                  │               │
+│                    ┌─────────────────────────────┼───────────┐   │
+│                    ▼                             ▼           ▼   │
 │            ┌─────────────┐          ┌─────────────┐  ┌──────────┐│
 │            │Quota Limits │          │Current Usage│  │Reserva-  ││
 │            │(PostgreSQL) │          │  (Redis)    │  │tions     ││
@@ -255,12 +255,11 @@ With reservation:
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-## Component Responsibilities
+## What's Inside the Quota Service?
 
-| Component | What it does |
-|-----------|--------------|
-| **Quota API** | REST endpoints that other services call (reserve, commit, release) |
-| **Enforcement Logic** | The business logic: check limits, reserve atomically, handle warnings |
+| Part | What it does |
+|------|--------------|
+| **API Endpoints** | REST endpoints that other services call (`/reserve`, `/commit`, `/release`) |
 | **Quota Limits (PostgreSQL)** | Stores each hospital's limits (e.g., "Hospital A can have max 5 environments") |
 | **Current Usage (Redis)** | Fast counter of current usage (e.g., "Hospital A has 4 environments") |
 | **Reservations (Redis)** | Temporary holds with expiration (e.g., "res_123 = 1 environment, expires in 1 hour") |
@@ -330,41 +329,7 @@ With a separate Quota Service:
 
 ---
 
-**Q: What about "Quota Service" vs "Quota Enforcement Service"?**
-
-There's only ONE service called **Quota Service**. Inside it are components:
-
-```
-┌─────────────────────────────────────────┐
-│            QUOTA SERVICE                │  ← The service (one thing)
-├─────────────────────────────────────────┤
-│                                         │
-│  ┌─────────────────┐                    │
-│  │   Quota API     │ ← HTTP endpoints   │  ← Internal components
-│  └────────┬────────┘                    │
-│           │                             │
-│           ▼                             │
-│  ┌─────────────────┐                    │
-│  │Enforcement Logic│ ← Business rules   │
-│  └────────┬────────┘                    │
-│           │                             │
-│           ▼                             │
-│  ┌─────────────────┐                    │
-│  │   Data Stores   │ ← PostgreSQL/Redis │
-│  └─────────────────┘                    │
-│                                         │
-└─────────────────────────────────────────┘
-
-Other services just see "Quota Service" - they don't care about the internals.
-```
-
-Think of it like a restaurant:
-- **Quota Service** = the restaurant
-- **Quota API** = the waiter (takes your order)
-- **Enforcement Logic** = the kitchen (makes the food)
-- **Data Stores** = the pantry (stores ingredients)
-
-You just say "I'd like to reserve a table" — you don't care how the kitchen works.
+**Summary:** Other services just call "Quota Service" — one service, simple name.
 
 ---
 
