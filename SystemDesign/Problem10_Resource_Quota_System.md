@@ -639,42 +639,46 @@ POST /api/v1/quota/reserve
 └─────────────────┘
 ```
 
-## 6.2 Atomic Check-and-Reserve (Redis Lua Script)
+## 6.2 Why "Atomic" Matters
 
-```lua
--- KEYS[1] = quota:usage:{tenant}:{resource}
--- KEYS[2] = quota:reservations:{tenant}:{resource}
--- KEYS[3] = quota:reservation:{reservation_id}
--- ARGV[1] = hard_limit
--- ARGV[2] = quantity
--- ARGV[3] = reservation_id
--- ARGV[4] = ttl_seconds
--- ARGV[5] = reservation_json
+**The problem:** Check and reserve must happen as ONE operation, not two.
 
-local current_usage = tonumber(redis.call('GET', KEYS[1]) or '0')
-local reservations = redis.call('SMEMBERS', KEYS[2])
-local reserved_total = 0
-
-for _, res_id in ipairs(reservations) do
-    local res_data = redis.call('GET', 'quota:reservation:' .. res_id)
-    if res_data then
-        local res = cjson.decode(res_data)
-        reserved_total = reserved_total + res.quantity
-    end
-end
-
-local total_committed = current_usage + reserved_total + tonumber(ARGV[2])
-
-if total_committed > tonumber(ARGV[1]) then
-    return {err = 'QUOTA_EXCEEDED', current = current_usage, reserved = reserved_total}
-end
-
--- Create reservation
-redis.call('SETEX', KEYS[3], ARGV[4], ARGV[5])
-redis.call('SADD', KEYS[2], ARGV[3])
-
-return {ok = true, current = current_usage, reserved = reserved_total + tonumber(ARGV[2])}
 ```
+❌ BAD: Two separate operations
+
+  Request A                         Request B
+      │                                 │
+      ▼                                 ▼
+  Read: "4/5 used"                  Read: "4/5 used"
+      │                                 │
+      ▼                                 ▼
+  "Room for 1? Yes!"                "Room for 1? Yes!"
+      │                                 │
+      ▼                                 ▼
+  Reserve 1                         Reserve 1
+      │                                 │
+      ▼                                 ▼
+  Now 5/5                           Now 6/5 ← OVER QUOTA!
+
+Both read "4" before either reserved → both succeed → bad!
+```
+
+```
+✓ GOOD: One atomic operation
+
+  Request A                         Request B
+      │                                 │
+      ▼                                 │
+  [Check AND Reserve]                   │  ← Redis locks this
+  "4/5? Room for 1? Yes. Reserved."     │
+  Now: 5/5                              │
+      │                                 ▼
+      │                           [Check AND Reserve]
+      │                           "5/5? Room for 1? No."
+      │                           REJECTED ✓
+```
+
+**How:** Use Redis with atomic operations (all-or-nothing). Redis processes one command at a time, so check+reserve can't be interrupted.
 
 ## 6.3 Handling Concurrent Requests
 
