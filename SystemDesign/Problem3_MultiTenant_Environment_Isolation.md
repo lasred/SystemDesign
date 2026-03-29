@@ -461,25 +461,208 @@ Queue: [job1, job2, job3, job4, job5...]
 
 ### 1. Tenant Isolation Strategy
 
-| Option | Pros | Cons | Recommendation |
-|--------|------|------|----------------|
-| **Shared DB + tenant_id column** | Cheapest | Query bug = data leak | Never for healthcare |
-| **Separate schema per tenant** | Mid isolation | Migration complexity | Acceptable |
-| **Separate DB per tenant** | Best isolation | Higher cost | **Use this** |
+**The Question:** How do we prevent Hospital A from seeing Hospital B's data?
 
-### 2. RBAC Storage
+---
 
-| Option | Pros | Cons | Recommendation |
-|--------|------|------|----------------|
-| **Roles in JWT** | Fast, no DB lookup | Token refresh for changes | **Use this** |
-| **Roles in DB lookup** | Always fresh | Adds latency | Only if roles change frequently |
+**Option A: Shared DB + tenant_id column**
 
-### 3. Environment Access
+All tenants share one database. Every table has a `tenant_id` column, and every query must include `WHERE tenant_id = ?`.
 
-| Option | Pros | Cons | Recommendation |
-|--------|------|------|----------------|
-| **List in JWT** | Fast authorization | Token size grows | **Use for <20 envs** |
-| **DB lookup** | Unlimited envs | Adds latency | Use for >20 envs |
+```
+┌─────────────────────────────────────────┐
+│              Shared Database            │
+├─────────────────────────────────────────┤
+│  patients table                         │
+│  ┌─────────┬───────────┬──────────┐    │
+│  │tenant_id│ patient_id│  name    │    │
+│  ├─────────┼───────────┼──────────┤    │
+│  │ hosp_A  │  p_001    │  Alice   │    │
+│  │ hosp_B  │  p_002    │  Bob     │ ◀── All mixed together!
+│  │ hosp_A  │  p_003    │  Carol   │    │
+│  └─────────┴───────────┴──────────┘    │
+└─────────────────────────────────────────┘
+
+Query: SELECT * FROM patients WHERE tenant_id = 'hosp_A'
+
+⚠️  DANGER: If developer forgets WHERE clause, data leaks!
+    SELECT * FROM patients  -- Returns ALL hospitals' data!
+```
+
+**Verdict:** Never for healthcare. One bug = HIPAA violation.
+
+---
+
+**Option B: Separate schema per tenant**
+
+One database, but each tenant gets their own schema (namespace). Tables are isolated.
+
+```
+┌─────────────────────────────────────────┐
+│              Shared Database            │
+├─────────────────────────────────────────┤
+│  ┌─────────────────┐ ┌─────────────────┐│
+│  │ schema: hosp_A  │ │ schema: hosp_B  ││
+│  │ ┌─────────────┐ │ │ ┌─────────────┐ ││
+│  │ │  patients   │ │ │ │  patients   │ ││
+│  │ │  Alice      │ │ │ │  Bob        │ ││
+│  │ │  Carol      │ │ │ └─────────────┘ ││
+│  │ └─────────────┘ │ │                 ││
+│  └─────────────────┘ └─────────────────┘│
+└─────────────────────────────────────────┘
+
+Query: SET search_path TO hosp_A; SELECT * FROM patients;
+       -- Only sees hosp_A's patients
+```
+
+**Pros:** Better isolation, shared infrastructure
+**Cons:** Schema migrations are complex (must update N schemas)
+
+---
+
+**Option C: Separate database per tenant** ✅ Recommended
+
+Each tenant gets their own database instance. Complete isolation.
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│  hosp_A DB      │     │  hosp_B DB      │
+├─────────────────┤     ├─────────────────┤
+│  patients       │     │  patients       │
+│  ┌───────────┐  │     │  ┌───────────┐  │
+│  │ Alice     │  │     │  │ Bob       │  │
+│  │ Carol     │  │     │  └───────────┘  │
+│  └───────────┘  │     │                 │
+└─────────────────┘     └─────────────────┘
+
+Connection string per tenant:
+  hosp_A → postgres://hosp_a_db:5432/patients
+  hosp_B → postgres://hosp_b_db:5432/patients
+```
+
+**Pros:** Impossible to leak data across tenants (different servers)
+**Cons:** Higher cost (more DB instances), more operational overhead
+
+**Verdict:** Use this for healthcare. Cost is worth the security.
+
+---
+
+### 2. RBAC Storage: JWT vs Database Lookup
+
+**The Question:** Where do we store the user's role and permissions?
+
+---
+
+**Option A: Roles embedded in JWT** ✅ Recommended
+
+When user logs in, their role is baked into the JWT token.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  JWT Token (stored in browser, sent with requests)  │
+├─────────────────────────────────────────────────────┤
+│  {                                                  │
+│    "sub": "user_123",                               │
+│    "tenant_id": "hospital_123",                     │
+│    "role": "environment_admin",    ◀── Role is HERE │
+│    "exp": 1234567890                                │
+│  }                                                  │
+└─────────────────────────────────────────────────────┘
+
+Authorization check (no DB needed):
+  1. Parse JWT
+  2. Read role from claims
+  3. Check: does "environment_admin" allow this action?
+  ✅ Fast! No database call.
+```
+
+**The catch:** If you change a user's role in the database, their JWT still has the old role until it expires (or they log out and back in).
+
+---
+
+**Option B: Roles fetched from database**
+
+JWT only has user ID. On each request, look up their role from the database.
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Request    │────▶│  Auth Check  │────▶│   Database   │
+│  (has JWT)   │     │              │     │              │
+└──────────────┘     └──────────────┘     └──────────────┘
+                            │                    │
+                            │  SELECT role       │
+                            │  FROM users        │
+                            │  WHERE id = ?      │
+                            │◀───────────────────┘
+                            │
+                     Check permissions
+```
+
+**Pros:** Role changes take effect immediately
+**Cons:** Every request hits the database (slower, +5-20ms latency)
+
+---
+
+**When to use which:**
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Roles rarely change | JWT (most cases) |
+| Need instant role revocation | DB lookup + short JWT expiry |
+| High-security (revoke access NOW) | DB lookup or token blacklist |
+
+---
+
+### 3. Environment Access List: JWT vs Database
+
+**The Question:** How do we know which environments a user can access?
+
+---
+
+**Option A: List environments in JWT** ✅ Recommended for <20 environments
+
+```json
+{
+  "sub": "user_123",
+  "tenant_id": "hospital_123",
+  "role": "environment_admin",
+  "env_access": ["env_prod", "env_staging", "env_dev"]  ◀── List is HERE
+}
+```
+
+Authorization check:
+```
+Is "env_prod" in env_access array?
+  → Yes? Allow access.
+  → No? Reject.
+
+✅ Fast! Just an array lookup, no DB call.
+```
+
+**The catch:** JWT has a size limit (~8KB). If a user has access to 100 environments, the token gets huge.
+
+---
+
+**Option B: Look up from database**
+
+JWT only has user ID. Query the `user_env_access` table on each request.
+
+```
+SELECT env_id FROM user_env_access WHERE user_id = 'user_123'
+```
+
+**Pros:** Unlimited environments, changes take effect immediately
+**Cons:** Database call on every request
+
+---
+
+**When to use which:**
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Users access <20 environments | JWT (fast, simple) |
+| Users access 20+ environments | DB lookup (avoid huge tokens) |
+| Need instant access revocation | DB lookup |
 
 ---
 
