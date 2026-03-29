@@ -352,14 +352,43 @@ With a separate Quota Service:
 │                    │ quota logic         │                      │
 │                    └─────────────────────┘                      │
 │                                                                  │
-│  Benefits:                                                       │
-│  - Single source of truth for quota logic                       │
-│  - Bug fix once, all services get it                            │
-│  - Consistent behavior across all resource types                │
-│  - Quota team owns it, other teams just call it                 │
-│                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**What does "reserve 1 user" mean?**
+
+Hospitals have limits on different resources, not just environments:
+
+```
+Hospital ABC's Quota Limits:
+┌─────────────────────────────────────┐
+│  Resource       │ Limit │ Used     │
+├─────────────────────────────────────┤
+│  Environments   │   5   │   4      │  ← "Can create 1 more environment"
+│  Users          │  100  │  87      │  ← "Can add 13 more users"
+│  Storage (GB)   │  500  │  340     │  ← "Can use 160 more GB"
+└─────────────────────────────────────┘
+```
+
+Example - Admin adds a new doctor to the hospital:
+
+```
+1. Admin: "Add Dr. Smith to our hospital"
+           │
+           ▼
+2. User Service: "Let me check if they have room"
+           │
+           ▼
+3. Quota Service: "Hospital ABC: 87/100 users. 87+1=88 ≤ 100? ✓ OK"
+           │
+           ▼
+4. User Service: Creates Dr. Smith's account
+           │
+           ▼
+5. Quota Service: Commit → Now 88/100 users
+```
+
+If they were at 100/100 users, step 3 would reject: "User quota exceeded."
 
 **The rule:** If multiple services need the same logic, extract it into its own service.
 
