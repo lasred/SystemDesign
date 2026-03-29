@@ -248,43 +248,40 @@ GET /api/v1/clone-jobs/clone_job_abc123/progress
      └──────────────┘  └──────────────┘  └─────────────┘
 ```
 
-## Database Schema
+## Schema & Indexes
 
-```sql
-CREATE TABLE clone_jobs (
-  job_id VARCHAR PRIMARY KEY,
-  source_env_id VARCHAR NOT NULL,
-  target_env_id VARCHAR,
-  tenant_id VARCHAR NOT NULL,
-  status VARCHAR NOT NULL,  -- PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED
-  clone_options JSONB,
-  progress_percent INT DEFAULT 0,
-  current_step VARCHAR,
-  eta_seconds INT,
-  webhook_url VARCHAR,
-  created_at TIMESTAMP NOT NULL,
-  started_at TIMESTAMP,
-  completed_at TIMESTAMP,
-  error_message TEXT,
-  created_by VARCHAR NOT NULL
-);
+**clone_jobs**
+| Column | Type | Notes |
+|--------|------|-------|
+| job_id | VARCHAR | PK |
+| source_env_id | VARCHAR | FK to environments |
+| target_env_id | VARCHAR | FK to environments |
+| tenant_id | VARCHAR | |
+| status | VARCHAR | PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED |
+| clone_options | JSONB | include_data, mask_phi, etc. |
+| progress_percent | INT | 0-100 |
+| current_step | VARCHAR | |
+| eta_seconds | INT | |
+| webhook_url | VARCHAR | |
+| created_at, started_at, completed_at | TIMESTAMP | |
+| error_message | TEXT | |
+| created_by | VARCHAR | |
 
-CREATE TABLE clone_job_steps (
-  step_id VARCHAR PRIMARY KEY,
-  job_id VARCHAR REFERENCES clone_jobs(job_id),
-  step_name VARCHAR NOT NULL,
-  step_order INT NOT NULL,
-  status VARCHAR NOT NULL,
-  percent INT DEFAULT 0,
-  metadata JSONB,
-  started_at TIMESTAMP,
-  completed_at TIMESTAMP,
-  error_message TEXT
-);
+**clone_job_steps**
+| Column | Type | Notes |
+|--------|------|-------|
+| step_id | VARCHAR | PK |
+| job_id | VARCHAR | FK to clone_jobs |
+| step_name | VARCHAR | SNAPSHOT_DATABASE, COPY_STORAGE, etc. |
+| step_order | INT | |
+| status | VARCHAR | |
+| percent | INT | 0-100 |
+| metadata | JSONB | bytes_copied, etc. |
+| started_at, completed_at | TIMESTAMP | |
 
-CREATE INDEX idx_clone_jobs_tenant ON clone_jobs(tenant_id);
-CREATE INDEX idx_clone_jobs_status ON clone_jobs(status) WHERE status = 'IN_PROGRESS';
-```
+**Indexes**
+- `clone_jobs(tenant_id)` — filter by tenant
+- `clone_jobs(status) WHERE status = 'IN_PROGRESS'` — partial index for active jobs
 
 ---
 

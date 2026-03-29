@@ -284,56 +284,42 @@ class ResourceType(Enum):
 }
 ```
 
-## Database Schema
+## Schema & Indexes
 
-```sql
--- Quota limits configuration
-CREATE TABLE quota_limits (
-  tenant_id VARCHAR NOT NULL,
-  resource_type VARCHAR NOT NULL,
-  hard_limit BIGINT NOT NULL,
-  soft_limit_percent INT DEFAULT 80,
-  override_limit BIGINT,              -- Temporary override
-  override_expires_at TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL,
-  updated_by VARCHAR NOT NULL,
-  PRIMARY KEY (tenant_id, resource_type)
-);
+**quota_limits** (PostgreSQL)
+| Column | Type | Notes |
+|--------|------|-------|
+| tenant_id | VARCHAR | PK (composite) |
+| resource_type | VARCHAR | PK (composite) — ENVIRONMENT, STORAGE_GB, USER |
+| hard_limit | BIGINT | |
+| soft_limit_percent | INT | Default 80 |
+| override_limit | BIGINT | Temporary override |
+| override_expires_at | TIMESTAMP | |
+| updated_at | TIMESTAMP | |
+| updated_by | VARCHAR | |
 
--- Audit log for quota changes
-CREATE TABLE quota_audit_log (
-  id SERIAL PRIMARY KEY,
-  tenant_id VARCHAR NOT NULL,
-  resource_type VARCHAR NOT NULL,
-  action VARCHAR NOT NULL,            -- SET_LIMIT, OVERRIDE, USAGE_CHANGE
-  old_value BIGINT,
-  new_value BIGINT,
-  reason TEXT,
-  performed_by VARCHAR NOT NULL,
-  performed_at TIMESTAMP NOT NULL
-);
+**quota_audit_log** (PostgreSQL)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | SERIAL | PK |
+| tenant_id | VARCHAR | |
+| resource_type | VARCHAR | |
+| action | VARCHAR | SET_LIMIT, OVERRIDE, USAGE_CHANGE |
+| old_value, new_value | BIGINT | |
+| reason | TEXT | |
+| performed_by | VARCHAR | |
+| performed_at | TIMESTAMP | |
 
-CREATE INDEX idx_quota_audit_tenant ON quota_audit_log(tenant_id, performed_at);
-```
+**Indexes**
+- `quota_audit_log(tenant_id, performed_at)` — query audit history by tenant
 
 ## Redis Data Structures
 
-```redis
-# Current usage counters
-# Key: quota:usage:{tenant_id}:{resource_type}
-# Value: integer count
-SET quota:usage:hospital_123:ENVIRONMENT 5
-
-# Reservations (with TTL)
-# Key: quota:reservation:{reservation_id}
-# Value: JSON with details
-SETEX quota:reservation:res_xyz789 3600 '{"tenant_id":"hospital_123","resource_type":"ENVIRONMENT","quantity":1}'
-
-# Reservation index by tenant (for summing)
-# Key: quota:reservations:{tenant_id}:{resource_type}
-# Value: Set of reservation IDs
-SADD quota:reservations:hospital_123:ENVIRONMENT res_xyz789
-```
+| Key Pattern | Type | Purpose |
+|-------------|------|---------|
+| `quota:usage:{tenant_id}:{resource_type}` | Integer | Current usage count |
+| `quota:reservation:{reservation_id}` | String (JSON) + TTL | Reservation details, auto-expires |
+| `quota:reservations:{tenant_id}:{resource_type}` | Set | Index of active reservation IDs for summing |
 
 ---
 

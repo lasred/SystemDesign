@@ -273,48 +273,45 @@ GET /api/v1/schedules/sched_abc123/executions
                     └──────────────────┘
 ```
 
-## Database Schema
+## Schema & Indexes
 
-```sql
-CREATE TABLE schedules (
-  schedule_id VARCHAR PRIMARY KEY,
-  env_id VARCHAR NOT NULL,
-  tenant_id VARCHAR NOT NULL,
-  name VARCHAR NOT NULL,
-  operation VARCHAR NOT NULL,           -- START, STOP, RESTART
-  schedule_type VARCHAR NOT NULL,       -- ONE_TIME, RECURRING
-  cron_expression VARCHAR,              -- NULL for one-time
-  run_at TIMESTAMP,                     -- NULL for recurring
-  timezone VARCHAR NOT NULL,
-  enabled BOOLEAN DEFAULT true,
-  status VARCHAR DEFAULT 'ACTIVE',      -- ACTIVE, PAUSED, DELETED
-  next_run_utc TIMESTAMP,
-  last_run_utc TIMESTAMP,
-  notification_config JSONB,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL,
-  created_by VARCHAR NOT NULL
-);
+**schedules**
+| Column | Type | Notes |
+|--------|------|-------|
+| schedule_id | VARCHAR | PK |
+| env_id | VARCHAR | FK to environments |
+| tenant_id | VARCHAR | |
+| name | VARCHAR | Human-readable name |
+| operation | VARCHAR | START, STOP, RESTART |
+| schedule_type | VARCHAR | ONE_TIME, RECURRING |
+| cron_expression | VARCHAR | NULL for one-time |
+| run_at | TIMESTAMP | NULL for recurring |
+| timezone | VARCHAR | e.g., "America/New_York" |
+| enabled | BOOLEAN | |
+| status | VARCHAR | ACTIVE, PAUSED, DELETED |
+| next_run_utc | TIMESTAMP | Computed, used for scanning |
+| last_run_utc | TIMESTAMP | |
+| notification_config | JSONB | webhook_url, notify_on |
+| created_at, updated_at | TIMESTAMP | |
+| created_by | VARCHAR | |
 
-CREATE INDEX idx_schedules_next_run ON schedules(next_run_utc)
-  WHERE enabled = true AND status = 'ACTIVE';
-CREATE INDEX idx_schedules_env ON schedules(env_id);
-CREATE INDEX idx_schedules_tenant ON schedules(tenant_id);
+**schedule_executions**
+| Column | Type | Notes |
+|--------|------|-------|
+| execution_id | VARCHAR | PK |
+| schedule_id | VARCHAR | FK to schedules |
+| scheduled_at | TIMESTAMP | When it was supposed to run |
+| started_at, completed_at | TIMESTAMP | |
+| status | VARCHAR | PENDING, RUNNING, SUCCESS, FAILED |
+| error_message | TEXT | |
+| retry_count | INT | |
+| worker_id | VARCHAR | Which worker executed |
 
-CREATE TABLE schedule_executions (
-  execution_id VARCHAR PRIMARY KEY,
-  schedule_id VARCHAR REFERENCES schedules(schedule_id),
-  scheduled_at TIMESTAMP NOT NULL,
-  started_at TIMESTAMP,
-  completed_at TIMESTAMP,
-  status VARCHAR NOT NULL,              -- PENDING, RUNNING, SUCCESS, FAILED
-  error_message TEXT,
-  retry_count INT DEFAULT 0,
-  worker_id VARCHAR                     -- Which worker executed
-);
-
-CREATE INDEX idx_executions_schedule ON schedule_executions(schedule_id, scheduled_at DESC);
-```
+**Indexes**
+- `schedules(next_run_utc) WHERE enabled = true AND status = 'ACTIVE'` — partial index for scanner queries
+- `schedules(env_id)` — list schedules for an environment
+- `schedules(tenant_id)` — list schedules for a tenant
+- `schedule_executions(schedule_id, scheduled_at DESC)` — execution history
 
 ---
 
