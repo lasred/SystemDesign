@@ -53,6 +53,62 @@ Hospital ABC (tenant)
 - **Tenant-level**: Controls total resource consumption for billing (hospital pays for 500 GB total, not per environment)
 - **Environment-level**: Controls performance isolation (prod gets more API capacity than dev)
 
+---
+
+**Real-time vs Eventual Consistency for Quotas:**
+
+"Consistency" = how quickly all parts of the system see the same data.
+
+```
+Real-time (strong consistency):
+  User A creates environment → Quota updated immediately → User B sees new count instantly
+
+Eventual consistency:
+  User A creates environment → Quota updates "soon" (maybe 5 sec delay) → User B might see stale count briefly
+```
+
+**Why real-time for provisioning?**
+
+When checking "can this hospital create another environment?", we MUST have accurate count.
+
+```
+Hospital ABC: 4/5 environments used
+
+         User A                              User B
+            │                                   │
+   "Create environment"                "Create environment"
+            │                                   │
+            ▼                                   ▼
+   ┌─────────────────┐                ┌─────────────────┐
+   │ Check quota:    │                │ Check quota:    │
+   │ 4 < 5? Yes! ✓   │                │ 4 < 5? Yes! ✓   │  ← Both see "4" (stale!)
+   └────────┬────────┘                └────────┬────────┘
+            │                                   │
+            ▼                                   ▼
+      Create env #5                       Create env #6   ← OVER QUOTA!
+
+With eventual consistency, both requests see "4" and both succeed → 6 environments (bad!)
+With real-time consistency, second request sees "5" and is blocked → 5 environments (correct!)
+```
+
+**Why eventual OK for usage display?**
+
+The dashboard showing "You've used 4 of 5 environments" can be slightly stale. If it shows "4" when the real count is "5", the user just refreshes. No harm done—the actual enforcement at provisioning time is still real-time.
+
+```
+Dashboard (eventual):          Provisioning (real-time):
+┌─────────────────────┐        ┌─────────────────────┐
+│ Environments: 4/5   │        │ Can I create?       │
+│ Storage: 340/500 GB │        │ → Check REAL count  │
+│                     │        │ → Block if over     │
+│ (updated every 30s) │        │ (must be accurate)  │
+└─────────────────────┘        └─────────────────────┘
+     ↑                              ↑
+     │                              │
+  Slight delay OK               Must be exact
+  (just a display)              (enforces the rule)
+```
+
 ## Functional Requirements (Confirmed)
 
 - **Quota enforcement**: Block requests that would exceed quota
