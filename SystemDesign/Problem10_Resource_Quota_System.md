@@ -260,10 +260,111 @@ With reservation:
 | Component | What it does |
 |-----------|--------------|
 | **Quota API** | REST endpoints that other services call (reserve, commit, release) |
-| **Quota Enforcement Service** | The logic: check limits, reserve atomically, handle warnings |
+| **Enforcement Logic** | The business logic: check limits, reserve atomically, handle warnings |
 | **Quota Limits (PostgreSQL)** | Stores each hospital's limits (e.g., "Hospital A can have max 5 environments") |
 | **Current Usage (Redis)** | Fast counter of current usage (e.g., "Hospital A has 4 environments") |
 | **Reservations (Redis)** | Temporary holds with expiration (e.g., "res_123 = 1 environment, expires in 1 hour") |
+
+---
+
+## Why Separate Services?
+
+**Q: Why not put quota logic inside Environment Service?**
+
+If we embed quota checks in Environment Service:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     EMBEDDED APPROACH (Bad)                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │ Environment Svc │  │   User Service  │  │ Storage Service │  │
+│  │                 │  │                 │  │                 │  │
+│  │ ┌─────────────┐ │  │ ┌─────────────┐ │  │ ┌─────────────┐ │  │
+│  │ │Quota logic  │ │  │ │Quota logic  │ │  │ │Quota logic  │ │  │
+│  │ │(duplicate!) │ │  │ │(duplicate!) │ │  │ │(duplicate!) │ │  │
+│  │ └─────────────┘ │  │ └─────────────┘ │  │ └─────────────┘ │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
+│                                                                  │
+│  Problem: Same quota logic copy-pasted 3 times!                 │
+│  - Bug fix? Update 3 places.                                    │
+│  - New quota type? Update 3 places.                             │
+│  - Different teams? Inconsistent implementations.               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+With a separate Quota Service:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SEPARATE SERVICE (Good)                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │ Environment Svc │  │   User Service  │  │ Storage Service │  │
+│  │                 │  │                 │  │                 │  │
+│  │ "reserve 1 env" │  │ "reserve 1 user"│  │ "reserve 10 GB" │  │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘  │
+│           │                    │                    │           │
+│           └────────────────────┼────────────────────┘           │
+│                                ▼                                 │
+│                    ┌─────────────────────┐                      │
+│                    │   QUOTA SERVICE     │                      │
+│                    │                     │                      │
+│                    │ One place for all   │                      │
+│                    │ quota logic         │                      │
+│                    └─────────────────────┘                      │
+│                                                                  │
+│  Benefits:                                                       │
+│  - Single source of truth for quota logic                       │
+│  - Bug fix once, all services get it                            │
+│  - Consistent behavior across all resource types                │
+│  - Quota team owns it, other teams just call it                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The rule:** If multiple services need the same logic, extract it into its own service.
+
+---
+
+**Q: What about "Quota Service" vs "Quota Enforcement Service"?**
+
+There's only ONE service called **Quota Service**. Inside it are components:
+
+```
+┌─────────────────────────────────────────┐
+│            QUOTA SERVICE                │  ← The service (one thing)
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌─────────────────┐                    │
+│  │   Quota API     │ ← HTTP endpoints   │  ← Internal components
+│  └────────┬────────┘                    │
+│           │                             │
+│           ▼                             │
+│  ┌─────────────────┐                    │
+│  │Enforcement Logic│ ← Business rules   │
+│  └────────┬────────┘                    │
+│           │                             │
+│           ▼                             │
+│  ┌─────────────────┐                    │
+│  │   Data Stores   │ ← PostgreSQL/Redis │
+│  └─────────────────┘                    │
+│                                         │
+└─────────────────────────────────────────┘
+
+Other services just see "Quota Service" - they don't care about the internals.
+```
+
+Think of it like a restaurant:
+- **Quota Service** = the restaurant
+- **Quota API** = the waiter (takes your order)
+- **Enforcement Logic** = the kitchen (makes the food)
+- **Data Stores** = the pantry (stores ingredients)
+
+You just say "I'd like to reserve a table" — you don't care how the kitchen works.
 
 ---
 
