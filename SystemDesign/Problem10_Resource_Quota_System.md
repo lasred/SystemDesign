@@ -154,65 +154,116 @@ Dashboard (eventual):          Provisioning (real-time):
 
 ## Core Insight: Reserve-Commit-Release Pattern
 
+Let's follow what happens when a user tries to create an environment:
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           QUOTA SERVICE                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│   ┌──────────────────────────────────────────────────────────────────┐      │
-│   │                      Quota API                                    │      │
-│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │      │
-│   │  │   Check     │  │  Reserve    │  │  Release    │              │      │
-│   │  │   Quota     │  │  Quota      │  │  Quota      │              │      │
-│   │  └─────────────┘  └─────────────┘  └─────────────┘              │      │
-│   └──────────────────────────────────────────────────────────────────┘      │
-│                                    │                                         │
-│                                    ▼                                         │
-│   ┌──────────────────────────────────────────────────────────────────┐      │
-│   │                    Quota Enforcement Service                       │      │
-│   │                                                                   │      │
-│   │   - Atomic check-and-reserve                                     │      │
-│   │   - Soft limit warnings                                          │      │
-│   │   - Hard limit blocking                                          │      │
-│   │   - Override handling                                            │      │
-│   └──────────────────────────────────────────────────────────────────┘      │
-│                                    │                                         │
-│              ┌─────────────────────┼─────────────────────┐                  │
-│              ▼                     ▼                     ▼                  │
-│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐          │
-│   │  Quota Limits   │   │  Current Usage  │   │  Reservations   │          │
-│   │  (Config DB)    │   │  (Fast Store)   │   │  (Fast Store)   │          │
-│   └─────────────────┘   └─────────────────┘   └─────────────────┘          │
-│                                                                              │
+│  STEP 1: User clicks "Create Environment"                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    │ Called by
-                                    ▼
+        │
+        │  User: "I want to create a new staging environment"
+        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        CONTROL PLANE SERVICES                                │
-├─────────────────────────────────────────────────────────────────────────────┤
+│  STEP 2: Environment Service receives request                               │
 │                                                                              │
-│   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                │
-│   │  Environment  │   │    User       │   │   Storage     │                │
-│   │  Provisioner  │   │   Service     │   │   Service     │                │
-│   │               │   │               │   │               │                │
-│   │  1. Reserve   │   │  1. Reserve   │   │  1. Reserve   │                │
-│   │  2. Create    │   │  2. Create    │   │  2. Allocate  │                │
-│   │  3. Commit    │   │  3. Commit    │   │  3. Commit    │                │
-│   └───────────────┘   └───────────────┘   └───────────────┘                │
-│                                                                              │
+│  Before creating anything, it asks: "Does this hospital have quota left?"  │
 └─────────────────────────────────────────────────────────────────────────────┘
+        │
+        │  Environment Service calls Quota Service
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 3: Quota Service checks and RESERVES                                  │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Check: Hospital ABC has 4/5 environments                            │   │
+│  │        4 + 1 = 5, which is ≤ 5                                      │   │
+│  │        ✓ OK! Reserve 1 slot.                                        │   │
+│  │                                                                      │   │
+│  │ Now: 4 used + 1 reserved = 5 (no one else can grab this slot)      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  Returns: reservation_id = "res_123"                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        │  Quota reserved! Now safe to create.
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 4: Environment Service creates the environment                        │
+│                                                                              │
+│  This is the slow part (create database, deploy apps, etc.)                 │
+│  Takes 5-10 minutes. Might fail!                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        │  Success or failure?
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 5a: SUCCESS → Commit the reservation                                  │
+│                                                                              │
+│  Environment Service: "Creation worked! Commit res_123"                     │
+│  Quota Service: Converts reservation to actual usage.                       │
+│                 Now: 5 used, 0 reserved.                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 5b: FAILURE → Release the reservation                                 │
+│                                                                              │
+│  Environment Service: "Creation failed! Release res_123"                    │
+│  Quota Service: Deletes reservation, slot is free again.                   │
+│                 Now: 4 used, 0 reserved.                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why reserve first?**
+
+The environment creation takes minutes. Without reservation:
+- User A starts creating (4/5 used)
+- User B starts creating (still sees 4/5, allowed!)
+- Both finish → 6/5 environments = over quota!
+
+With reservation:
+- User A reserves (4 used + 1 reserved = 5)
+- User B tries to reserve → blocked (5 = limit)
+- Only User A's environment is created → correct!
+
+---
+
+## System Components
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         QUOTA SERVICE                             │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│   Quota API                    Quota Enforcement Service         │
+│   ┌─────────────────────┐     ┌─────────────────────────────┐   │
+│   │ POST /quota/reserve │────▶│ - Check limit               │   │
+│   │ POST /quota/commit  │     │ - Reserve atomically        │   │
+│   │ POST /quota/release │     │ - Warn at soft limit (80%)  │   │
+│   └─────────────────────┘     │ - Block at hard limit       │   │
+│                                └─────────────────────────────┘   │
+│                                             │                     │
+│                    ┌────────────────────────┼────────────────┐   │
+│                    ▼                        ▼                ▼   │
+│            ┌─────────────┐          ┌─────────────┐  ┌──────────┐│
+│            │Quota Limits │          │Current Usage│  │Reserva-  ││
+│            │(PostgreSQL) │          │  (Redis)    │  │tions     ││
+│            │             │          │             │  │(Redis)   ││
+│            │ Hospital A: │          │ Hospital A: │  │res_123:  ││
+│            │ max 5 envs  │          │ 4 envs used │  │ 1 env    ││
+│            └─────────────┘          └─────────────┘  └──────────┘│
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Responsibilities
 
-| Component | Responsibility |
-|-----------|---------------|
-| **Quota API** | REST interface for check/reserve/release operations |
-| **Enforcement Service** | Business logic for limit checking, warnings, blocking |
-| **Quota Limits Store** | Tenant quota configurations (PostgreSQL) |
-| **Usage Store** | Current usage counters (Redis for speed) |
-| **Reservations Store** | Pending reservations with TTL (Redis) |
+| Component | What it does |
+|-----------|--------------|
+| **Quota API** | REST endpoints that other services call (reserve, commit, release) |
+| **Quota Enforcement Service** | The logic: check limits, reserve atomically, handle warnings |
+| **Quota Limits (PostgreSQL)** | Stores each hospital's limits (e.g., "Hospital A can have max 5 environments") |
+| **Current Usage (Redis)** | Fast counter of current usage (e.g., "Hospital A has 4 environments") |
+| **Reservations (Redis)** | Temporary holds with expiration (e.g., "res_123 = 1 environment, expires in 1 hour") |
 
 ---
 
