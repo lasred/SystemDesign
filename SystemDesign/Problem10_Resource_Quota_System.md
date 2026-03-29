@@ -25,6 +25,34 @@
 | Real-time or eventual? | Consistency requirements | Real-time for provisioning, eventual OK for usage display |
 | What about pending resources? | Edge case handling | Count pending provisions against quota |
 
+**Quota Hierarchy Example:**
+
+Some quotas apply to the whole hospital (tenant), others to each environment:
+
+```
+Hospital ABC (tenant)
+├── Tenant-level quotas (shared across all environments):
+│   ├── Max 5 environments        ← Hospital can create 5 total
+│   ├── Max 500 GB storage        ← 500 GB shared across all envs
+│   └── Max 100 users             ← 100 users for the whole hospital
+│
+├── Production (environment)
+│   └── Env-level quotas:
+│       └── Max 50 API calls/sec  ← This env's rate limit
+│
+├── Staging (environment)
+│   └── Env-level quotas:
+│       └── Max 20 API calls/sec  ← Lower limit for staging
+│
+└── Dev (environment)
+    └── Env-level quotas:
+        └── Max 10 API calls/sec  ← Lowest for dev
+```
+
+**Why both levels?**
+- **Tenant-level**: Controls total resource consumption for billing (hospital pays for 500 GB total, not per environment)
+- **Environment-level**: Controls performance isolation (prod gets more API capacity than dev)
+
 ## Functional Requirements (Confirmed)
 
 - **Quota enforcement**: Block requests that would exceed quota
