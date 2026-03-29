@@ -520,13 +520,12 @@ POST /api/v1/quota/reserve
 
 ## Resource Types
 
-```python
-class ResourceType(Enum):
-    ENVIRONMENT = "ENVIRONMENT"       # Count of environments
-    STORAGE_GB = "STORAGE_GB"         # Total storage in GB
-    USER = "USER"                     # Count of users
-    API_CALLS_DAILY = "API_CALLS"     # Daily API call limit
-```
+| Type | What it tracks |
+|------|---------------|
+| ENVIRONMENT | Count of environments |
+| STORAGE_GB | Total storage in GB |
+| USER | Count of users |
+| API_CALLS_DAILY | Daily API call limit |
 
 ## Default Quotas by Tier
 

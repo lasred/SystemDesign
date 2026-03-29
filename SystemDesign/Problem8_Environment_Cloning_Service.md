@@ -414,34 +414,20 @@ Admin clicks "Cancel Clone"
 
 ## 6.4 Progress Calculation
 
-```python
-def calculate_progress(job):
-    """
-    Progress is weighted by estimated step duration.
-    """
-    step_weights = {
-        "SNAPSHOT_DATABASE": 10,   # Fast - just creates reference
-        "SNAPSHOT_STORAGE": 5,     # Fast - blob snapshots
-        "RESTORE_DATABASE": 30,    # Slow - full restore
-        "RESTORE_STORAGE": 25,     # Medium - copy bytes
-        "MASK_PHI": 20,            # Medium - DB transformations
-        "COPY_CONFIGS": 5,         # Fast - small documents
-        "FINALIZE": 5              # Fast - status updates
-    }
+Progress is weighted by how long each step takes:
 
-    total_weight = sum(step_weights.values())
-    completed_weight = 0
+| Step | Weight | Why |
+|------|--------|-----|
+| SNAPSHOT_DATABASE | 10% | Fast - just creates a reference |
+| SNAPSHOT_STORAGE | 5% | Fast - blob snapshots |
+| RESTORE_DATABASE | 30% | Slow - full restore |
+| RESTORE_STORAGE | 25% | Medium - copying bytes |
+| MASK_PHI | 20% | Medium - DB transformations |
+| COPY_CONFIGS | 5% | Fast - small documents |
+| FINALIZE | 5% | Fast - status updates |
 
-    for step in job.steps:
-        weight = step_weights[step.name]
-        if step.status == "COMPLETED":
-            completed_weight += weight
-        elif step.status == "IN_PROGRESS":
-            # Partial credit based on step's internal progress
-            completed_weight += weight * (step.percent / 100)
-
-    return int((completed_weight / total_weight) * 100)
-```
+**Example:** If SNAPSHOT_DATABASE and RESTORE_DATABASE are done, and RESTORE_STORAGE is 50% done:
+- Completed: 10 + 30 + (25 × 0.5) = 52.5%
 
 ---
 

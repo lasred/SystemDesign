@@ -292,42 +292,23 @@ A reference guide for core concepts with OHCP-relevant examples.
 | FAILED | retry | CREATING | Restart workflow |
 | FAILED | delete | DELETED | Cleanup partial resources |
 
-### Implementation Pattern
+### Implementation: Allowed Transitions Table
 
-```python
-class EnvironmentStateMachine:
-    TRANSITIONS = {
-        None: ['CREATING'],
-        'CREATING': ['ACTIVE', 'FAILED'],
-        'ACTIVE': ['SUSPENDED', 'UPDATING', 'DELETING'],
-        'SUSPENDED': ['ACTIVE', 'DELETING'],
-        'UPDATING': ['ACTIVE'],  # Always returns to ACTIVE (success or rollback)
-        'DELETING': ['DELETED'],
-        'FAILED': ['CREATING', 'DELETED'],
-        'DELETED': [],  # Terminal state
-    }
+| From State | Can Go To |
+|------------|-----------|
+| (new) | CREATING |
+| CREATING | ACTIVE, FAILED |
+| ACTIVE | SUSPENDED, UPDATING, DELETING |
+| SUSPENDED | ACTIVE, DELETING |
+| UPDATING | ACTIVE (success or rollback) |
+| DELETING | DELETED |
+| FAILED | CREATING (retry), DELETED |
+| DELETED | (terminal - nowhere) |
 
-    def can_transition(self, from_state: str, to_state: str) -> bool:
-        return to_state in self.TRANSITIONS.get(from_state, [])
-
-    def transition(self, env: Environment, new_state: str) -> None:
-        if not self.can_transition(env.state, new_state):
-            raise InvalidTransitionError(
-                f"Cannot transition from {env.state} to {new_state}"
-            )
-
-        old_state = env.state
-        env.state = new_state
-        env.state_changed_at = datetime.utcnow()
-
-        # Audit log
-        self.audit_log.record(
-            entity_id=env.id,
-            old_state=old_state,
-            new_state=new_state,
-            timestamp=env.state_changed_at
-        )
-```
+**On every transition:**
+1. Check if transition is allowed (reject if not)
+2. Update state and timestamp
+3. Write to audit log
 
 ---
 
@@ -379,54 +360,45 @@ class EnvironmentStateMachine:
 ### Implementation Approaches
 
 **1. Idempotency Key (Client-Provided)**
-```python
-def create_environment(request):
-    idempotency_key = request.headers.get('Idempotency-Key')
 
-    # Check if we've seen this key before
-    existing = db.query(
-        "SELECT * FROM idempotency_cache WHERE key = %s",
-        idempotency_key
-    )
+```
+Client sends: POST /environments
+              Header: Idempotency-Key: "abc-123"
 
-    if existing:
-        return existing.response  # Return cached response
-
-    # Process request
-    result = do_create_environment(request.body)
-
-    # Cache response
-    db.execute(
-        "INSERT INTO idempotency_cache (key, response, expires_at) VALUES (%s, %s, %s)",
-        idempotency_key, result, datetime.utcnow() + timedelta(hours=24)
-    )
-
-    return result
+Server:
+  1. Check: Have I seen "abc-123" before?
+     → Yes? Return the cached response (don't create again)
+     → No? Continue...
+  2. Create the environment
+  3. Cache the response with key "abc-123" (expires in 24h)
+  4. Return response
 ```
 
 **2. Natural Idempotency (Operation is inherently safe)**
-```python
-# DELETE is naturally idempotent
-def delete_environment(env_id):
-    env = get_environment(env_id)
-    if env is None or env.status == 'DELETED':
-        return {"status": "already deleted"}  # Safe to call multiple times
 
-    do_delete(env)
-    return {"status": "deleted"}
+```
+DELETE /environments/env_123
+
+Server:
+  1. Does env_123 exist?
+     → No? Return "already deleted" (success, not error)
+     → Yes? Delete it, return "deleted"
+
+Calling DELETE twice = same result. Naturally idempotent.
 ```
 
 **3. Conditional Updates (Optimistic Locking)**
-```python
-def update_environment(env_id, new_config, expected_version):
-    result = db.execute("""
-        UPDATE environments
-        SET config = %s, version = version + 1
-        WHERE id = %s AND version = %s
-    """, new_config, env_id, expected_version)
 
-    if result.rows_affected == 0:
-        raise ConflictError("Version mismatch - resource was modified")
+```
+Client sends: PUT /environments/env_123
+              Body: { config: "new", expected_version: 5 }
+
+Server:
+  1. UPDATE environments SET config = "new", version = 6
+     WHERE id = "env_123" AND version = 5
+  2. Did it update any rows?
+     → Yes? Success
+     → No? Someone else changed it → return "conflict, try again"
 ```
 
 ### OHCP Idempotency Examples
