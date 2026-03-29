@@ -342,11 +342,107 @@ Headers: Authorization: Bearer <JWT>
 
 ## Potential Bottlenecks
 
-| Bottleneck | Solution |
-|------------|----------|
-| **Auth service overload** | Cache JWT validation, distributed auth |
-| **Control plane DB** | Read replicas, connection pooling |
-| **Provisioning backlog** | Multiple workers, priority queues |
+### 1. Auth Service Overload
+
+**The Problem:**
+Every API request needs to validate the JWT token. If you have 10,000 requests/second, that's 10,000 calls to your auth service.
+
+**Current approach (JWT):**
+```
+Request comes in with JWT
+        │
+        ▼
+┌─────────────────────────────┐
+│ Auth Service validates JWT: │
+│ 1. Check signature (crypto) │
+│ 2. Check expiry             │
+│ 3. Extract claims           │
+└─────────────────────────────┘
+```
+
+**Solutions:**
+
+| Solution | How It Works |
+|----------|--------------|
+| **JWT signature validation locally** | JWT is self-contained. Any service can validate the signature using the public key—no need to call auth service. Just distribute the public key to all services. |
+| **Cache validated tokens** | After validating a JWT once, cache the result (e.g., in Redis) for a few minutes. Next request with same token skips validation. |
+| **Distributed auth** | Instead of one auth service, run multiple instances behind a load balancer. Each instance can validate independently since JWT validation is stateless. |
+
+```
+BEFORE: All requests hit one auth service
+┌─────────┐
+│ Service │──────▶ Auth Service (bottleneck!)
+└─────────┘
+
+AFTER: Each service validates JWT locally
+┌─────────┐
+│ Service │──▶ Local JWT validation (using cached public key)
+└─────────┘    No network call needed!
+```
+
+---
+
+### 2. Control Plane Database Overload
+
+**The Problem:**
+All tenant/environment queries hit one database. Reads are much more frequent than writes (e.g., "get environment details" vs "create environment").
+
+**Solutions:**
+
+| Solution | How It Works |
+|----------|--------------|
+| **Read replicas** | Create copies of the database that stay in sync. Route read queries (SELECT) to replicas, write queries (INSERT/UPDATE) to primary. Spreads the load. |
+| **Connection pooling** | Instead of each request opening a new DB connection (expensive), reuse a pool of connections. Tools: PgBouncer, HikariCP. |
+
+```
+BEFORE: All queries hit primary DB
+┌─────────┐
+│ Service │──────▶ Primary DB (bottleneck!)
+└─────────┘
+
+AFTER: Reads go to replicas
+┌─────────┐      ┌─────────────┐
+│ Service │─────▶│ Primary DB  │◀── writes only
+└─────────┘      └──────┬──────┘
+     │                  │ replicates
+     │           ┌──────▼──────┐
+     └──────────▶│ Read Replica│◀── reads (most traffic)
+                 └─────────────┘
+```
+
+---
+
+### 3. Provisioning Backlog
+
+**The Problem:**
+Creating an environment takes 5-10 minutes. If 100 hospitals request environments at once, a single provisioner gets backed up.
+
+**Solutions:**
+
+| Solution | How It Works |
+|----------|--------------|
+| **Multiple workers** | Run N provisioner instances. Each pulls jobs from the same queue and works in parallel. |
+| **Priority queues** | Paid/enterprise tenants get a high-priority queue that's processed first. Free tier waits longer. |
+
+```
+BEFORE: One worker, jobs pile up
+Queue: [job1, job2, job3, job4, job5...]
+              │
+              ▼
+        ┌──────────┐
+        │ Worker 1 │  (slow!)
+        └──────────┘
+
+AFTER: Multiple workers process in parallel
+Queue: [job1, job2, job3, job4, job5...]
+         │     │     │
+         ▼     ▼     ▼
+      ┌────┐┌────┐┌────┐
+      │ W1 ││ W2 ││ W3 │  (3x faster)
+      └────┘└────┘└────┘
+```
+
+---
 
 ## Numbers to Know
 
