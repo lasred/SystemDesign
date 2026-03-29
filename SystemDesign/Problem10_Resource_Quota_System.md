@@ -169,7 +169,7 @@ Dashboard (eventual):          Provisioning (real-time):
 │                                    │                                         │
 │                                    ▼                                         │
 │   ┌──────────────────────────────────────────────────────────────────┐      │
-│   │                    Quota Enforcement Engine                       │      │
+│   │                    Quota Enforcement Service                       │      │
 │   │                                                                   │      │
 │   │   - Atomic check-and-reserve                                     │      │
 │   │   - Soft limit warnings                                          │      │
@@ -209,7 +209,7 @@ Dashboard (eventual):          Provisioning (real-time):
 | Component | Responsibility |
 |-----------|---------------|
 | **Quota API** | REST interface for check/reserve/release operations |
-| **Enforcement Engine** | Business logic for limit checking, warnings, blocking |
+| **Enforcement Service** | Business logic for limit checking, warnings, blocking |
 | **Quota Limits Store** | Tenant quota configurations (PostgreSQL) |
 | **Usage Store** | Current usage counters (Redis for speed) |
 | **Reservations Store** | Pending reservations with TTL (Redis) |
