@@ -553,6 +553,43 @@ Connection string per tenant:
 
 ---
 
+**First, what is a JWT?**
+
+JWT (JSON Web Token) is a signed token that the server gives to the user after login. The user sends it with every request to prove who they are.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            JWT Structure                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEyMyIsInRlbmFudF9pZ...          │
+│  \_______header______/\________________payload__________________/        │
+│                                                                          │
+│  Decoded payload:                                                        │
+│  {                                                                       │
+│    "sub": "user_123",           ← User ID                               │
+│    "tenant_id": "hospital_123", ← Which hospital                        │
+│    "role": "env_admin",         ← Their role                            │
+│    "exp": 1234567890            ← Expiration time                       │
+│  }                                                                       │
+│                                                                          │
+│  + signature (server's secret key proves this wasn't tampered with)     │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Login flow:
+1. User sends username/password
+2. Server validates, creates JWT with user info, signs it
+3. Server returns JWT to user
+4. User stores JWT (browser localStorage or cookie)
+5. User sends JWT with every request (Authorization: Bearer <token>)
+6. Server validates signature → trusts the claims inside
+```
+
+**Key property:** The server can read the JWT claims (user ID, role, etc.) without calling a database—the signature proves the data is authentic.
+
+---
+
 **Option A: Roles embedded in JWT** ✅ Recommended
 
 When user logs in, their role is baked into the JWT token.
