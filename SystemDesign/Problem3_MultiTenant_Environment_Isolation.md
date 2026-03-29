@@ -175,22 +175,49 @@ POST /api/v1/tenants/hospital_123/environments
 ## Entity Relationships
 
 ```
-┌─────────────┐       ┌─────────────────┐       ┌─────────────┐
-│   Tenant    │1─────*│   Environment   │       │    User     │
-│  (Hospital) │       │                 │       │             │
-├─────────────┤       ├─────────────────┤       ├─────────────┤
-│ tenant_id   │       │ env_id          │       │ user_id     │
-│ name        │       │ tenant_id (FK)  │       │ tenant_id   │
-│ status      │       │ name            │       │ email       │
-│ created_at  │       │ type            │       │ role        │
-└─────────────┘       │ status          │       └──────┬──────┘
-                      │ created_at      │              │
-                      └─────────────────┘              │
-                               ▲                       │
-                               │                       │
-                               └───────────────────────┘
-                                  user_env_access (M:M)
+┌─────────────┐         ┌─────────────────┐         ┌─────────────┐
+│   Tenant    │         │   Environment   │         │    User     │
+│  (Hospital) │         │                 │         │             │
+├─────────────┤         ├─────────────────┤         ├─────────────┤
+│ tenant_id   │         │ env_id          │         │ user_id     │
+│ name        │         │ tenant_id (FK)  │         │ tenant_id   │
+│ status      │         │ name            │         │ email       │
+│ created_at  │         │ type            │         │ role        │
+└──────┬──────┘         │ status          │         └──────┬──────┘
+       │                │ created_at      │                │
+       │                └────────┬────────┘                │
+       │                         │                         │
+       │ 1:N                     │                         │ 1:N
+       │ (one hospital has       │                         │ (one hospital has
+       │  many environments)     │                         │  many users)
+       │                         │                         │
+       ▼                         │                         ▼
+  ┌─────────┐                    │                    ┌─────────┐
+  │ Hospital├────────────────────┘                    │ Hospital│
+  │ owns    │                                         │ owns    │
+  └─────────┘                                         └─────────┘
+                                 │
+                         N:M     │
+                   (many users can access
+                    many environments)
+                                 │
+                                 ▼
+                    ┌────────────────────────┐
+                    │    user_env_access     │
+                    │    (join table)        │
+                    ├────────────────────────┤
+                    │ user_id (FK)           │
+                    │ env_id (FK)            │
+                    │ granted_at             │
+                    └────────────────────────┘
 ```
+
+**Relationship Summary:**
+| Relationship | Type | Meaning |
+|--------------|------|---------|
+| Tenant → Environment | 1:N | One hospital has many environments (prod, staging, dev) |
+| Tenant → User | 1:N | One hospital has many users |
+| User ↔ Environment | N:M | Many users can access many environments (via user_env_access) |
 
 ## Schema & Indexes
 
