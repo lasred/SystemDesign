@@ -227,42 +227,78 @@ With reservation:
 
 ---
 
-## System Components
+## What Happens Inside Quota Service?
+
+When Environment Service calls `POST /quota/reserve`:
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                         QUOTA SERVICE                             │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│   API Endpoints                       What it does               │
-│   ┌─────────────────────┐            ┌─────────────────────┐    │
-│   │ POST /quota/reserve │───────────▶│ - Check limit       │    │
-│   │ POST /quota/commit  │            │ - Reserve atomically│    │
-│   │ POST /quota/release │            │ - Warn at 80%       │    │
-│   └─────────────────────┘            │ - Block at 100%     │    │
-│                                       └──────────┬──────────┘    │
-│                                                  │               │
-│                    ┌─────────────────────────────┼───────────┐   │
-│                    ▼                             ▼           ▼   │
-│            ┌─────────────┐          ┌─────────────┐  ┌──────────┐│
-│            │Quota Limits │          │Current Usage│  │Reserva-  ││
-│            │(PostgreSQL) │          │  (Redis)    │  │tions     ││
-│            │             │          │             │  │(Redis)   ││
-│            │ Hospital A: │          │ Hospital A: │  │res_123:  ││
-│            │ max 5 envs  │          │ 4 envs used │  │ 1 env    ││
-│            └─────────────┘          └─────────────┘  └──────────┘│
-│                                                                   │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              QUOTA SERVICE                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Input: "Hospital ABC wants to reserve 1 environment"                       │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ STEP 1: What's the limit?                                              │ │
+│  │                                                                         │ │
+│  │         Look up in database: Hospital ABC → max 5 environments         │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                        │
+│                                     ▼                                        │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ STEP 2: What's currently used + reserved?                              │ │
+│  │                                                                         │ │
+│  │         Current usage:      4 environments                             │ │
+│  │         Pending reservations: 0                                         │ │
+│  │         ─────────────────────────                                       │ │
+│  │         Total committed:    4                                           │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                        │
+│                                     ▼                                        │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ STEP 3: Is there room?                                                 │ │
+│  │                                                                         │ │
+│  │         4 (used) + 1 (requested) = 5                                   │ │
+│  │         5 ≤ 5 (limit)?  ✓ YES                                          │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                     │                                        │
+│                                     ▼                                        │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ STEP 4: Create reservation                                             │ │
+│  │                                                                         │ │
+│  │         Save: "res_abc = 1 environment, expires in 1 hour"             │ │
+│  │         Return: { reservation_id: "res_abc", status: "reserved" }      │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## What's Inside the Quota Service?
+**After reservation, the state is:**
+```
+Hospital ABC:
+  - Limit:        5
+  - Used:         4  (actual environments that exist)
+  - Reserved:     1  (being created right now)
+  - Available:    0  (no one else can create until this finishes)
+```
 
-| Part | What it does |
-|------|--------------|
-| **API Endpoints** | REST endpoints that other services call (`/reserve`, `/commit`, `/release`) |
-| **Quota Limits (PostgreSQL)** | Stores each hospital's limits (e.g., "Hospital A can have max 5 environments") |
-| **Current Usage (Redis)** | Fast counter of current usage (e.g., "Hospital A has 4 environments") |
-| **Reservations (Redis)** | Temporary holds with expiration (e.g., "res_123 = 1 environment, expires in 1 hour") |
+**When provisioning completes:**
+```
+POST /quota/commit (reservation_id: "res_abc")
+
+  → Delete reservation (reserved: 1 → 0)
+  → Increment usage (used: 4 → 5)
+  → Done!
+```
+
+**If provisioning fails:**
+```
+POST /quota/release (reservation_id: "res_abc")
+
+  → Delete reservation (reserved: 1 → 0)
+  → Usage stays the same (used: 4)
+  → Slot is free for someone else
+```
 
 ---
 
