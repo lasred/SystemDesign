@@ -1,14 +1,16 @@
-# Problem 3: Multi-Tenant Healthcare Environment Platform
+# Problem 3: Multi-Tenant Environment Management
+
+**Difficulty: Medium** | **Focus: Data Model & Access Control**
 
 ## Interviewer Prompt
 
-> "We need to design a platform that manages isolated healthcare environments for hospital customers.
+> "We need to design a platform that manages healthcare environments for hospital customers.
 >
-> When a hospital subscribes to our products, we create environments for them—things like their EHR instance, patient portal, analytics. Each hospital might have multiple environments: production, staging, dev.
+> When a hospital subscribes, we create environments for them—things like their EHR instance, patient portal, analytics. Each hospital might have multiple environments: production, staging, dev.
 >
-> We need to make sure hospitals can't see each other's data. We also need role-based access—org admins, environment admins, regular users.
+> We need to make sure hospitals can't see each other's data, and we need role-based access—org admins, environment admins, regular users.
 >
-> How would you design this?"
+> How would you design the data model and access control for this?"
 
 ---
 
@@ -18,28 +20,24 @@
 
 | Question | Why It Matters | Example Answer |
 |----------|----------------|----------------|
-| How many hospitals/tenants? | Isolation strategy, infra cost | 100-1000 hospitals |
-| Environments per hospital? | Resource planning | 3-5 (prod, staging, dev, etc.) |
-| Users per environment? | Auth system scale | 50-500 per environment |
-| Read/write ratio? | DB optimization | 80/20 read-heavy |
-| Isolation level needed? | Network vs DB vs app | Full network isolation (HIPAA) |
-| Latency requirements? | Architecture decisions | <200ms P99 |
-| Availability target? | Redundancy planning | 99.95% for prod |
+| How many hospitals/tenants? | Scale of system | 100-500 hospitals |
+| Environments per hospital? | Resource planning | 3-5 (prod, staging, dev) |
+| Users per environment? | Auth system scale | 50-200 per environment |
+| What roles are needed? | RBAC design | Org admin, env admin, user |
+| Isolation level needed? | Architecture | Separate databases per tenant |
 
 ## Functional Requirements (Confirmed)
 
 - **Tenant isolation**: Hospital A cannot access Hospital B's data
 - **Multi-environment**: Each hospital has prod/staging/dev environments
 - **RBAC**: Three role levels with different permissions
-- **Environment lifecycle**: Create, update, delete, clone environments
-- **Onboarding/Offboarding**: Hospital signup and churn flows
+- **Environment lifecycle**: Create, update, delete environments
 
 ## Non-Functional Requirements
 
-- **HIPAA compliance**: Encryption, audit logs, access controls
-- **High availability**: 99.95% for production environments
-- **Scalability**: Support 1000+ hospitals, 5000+ environments
-- **Security**: Zero tolerance for cross-tenant data leaks
+- **Security**: No cross-tenant data leaks
+- **Scalability**: Support 500+ hospitals
+- **Audit**: Log all access for compliance
 
 ---
 
@@ -49,20 +47,19 @@
 
 | Actor | Scope | Key Actions |
 |-------|-------|-------------|
-| **Hospital Admin** | Tenant-wide | Create/delete environments, manage users, view billing |
-| **Environment Admin** | Single environment | Configure services, deploy apps, manage env settings |
-| **Regular User** | Single environment | Access patient data, use applications |
+| **Hospital Admin** | Tenant-wide | Create/delete environments, manage users |
+| **Environment Admin** | Single environment | Configure settings, manage env users |
+| **Regular User** | Single environment | Access applications, view data |
 
 ## In Scope (This Interview)
-- Tenant & environment management
-- Isolation architecture
-- Access control system
+- Tenant & environment data model
+- RBAC and access control
 - Environment provisioning flow
 
 ## Out of Scope
-- Individual application design (EHR, portal internals)
-- Billing system details
-- Specific cloud provider implementation
+- Individual application design (EHR internals)
+- Billing system
+- Infrastructure provisioning details
 
 ---
 
@@ -75,47 +72,42 @@
 │                            CONTROL PLANE (Shared)                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│   ┌──────────────┐    ┌─────────────────────────┐    ┌──────────────────┐   │
-│   │   Clients    │───▶│  Security & Access      │───▶│   Monitoring/    │   │
-│   │              │    │  Control (AuthN/AuthZ)  │    │   Audit Service  │   │
-│   └──────────────┘    └───────────┬─────────────┘    └──────────────────┘   │
+│   ┌──────────────┐    ┌─────────────────────┐    ┌──────────────────┐       │
+│   │   Clients    │───▶│   Auth Service      │───▶│   Audit Service  │       │
+│   │              │    │   (AuthN/AuthZ)     │    │                  │       │
+│   └──────────────┘    └───────────┬─────────┘    └──────────────────┘       │
 │                                   │                                          │
 │                                   ▼                                          │
 │   ┌───────────────────────────────────────────────────────────────────┐     │
 │   │                    Tenant Management Service                       │     │
-│   │         (Hospital/Tenant level interactions & RBAC)               │     │
-│   └───────────────────────────────┬───────────────────────────────────┘     │
-│                                   │ Provision environment                    │
-│                                   ▼                                          │
-│   ┌───────────────────────────────────────────────────────────────────┐     │
-│   │                 Environment Management Service                     │     │
-│   │      (Handle internal environments, deploy app/data)              │     │
+│   │              (Hospitals, Users, Roles, Permissions)               │     │
 │   └───────────────────────────────┬───────────────────────────────────┘     │
 │                                   │                                          │
 │                                   ▼                                          │
 │   ┌───────────────────────────────────────────────────────────────────┐     │
-│   │                   Infrastructure Provisioner                       │     │
-│   │          (Creates separate VPCs, databases, storage buckets)      │     │
+│   │                 Environment Management Service                     │     │
+│   │                  (Environment CRUD, Lifecycle)                    │     │
 │   └───────────────────────────────────────────────────────────────────┘     │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
-
+                                    │
+                         Manages    │
+                                    ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          DATA PLANE (Isolated per Hospital)                  │
+│                     DATA PLANE (Isolated per Hospital)                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌─────────────────────────┐  ┌─────────────────────────┐                   │
-│  │   Hospital A Environment│  │   Hospital B Environment│    ...            │
+│  │   Hospital A            │  │   Hospital B            │    ...            │
 │  │   ┌─────────────────┐   │  │   ┌─────────────────┐   │                   │
 │  │   │ App Services    │   │  │   │ App Services    │   │                   │
 │  │   │ (EHR, Portal)   │   │  │   │ (EHR, Portal)   │   │                   │
 │  │   └─────────────────┘   │  │   └─────────────────┘   │                   │
 │  │   ┌────────┬────────┐   │  │   ┌────────┬────────┐   │                   │
-│  │   │Storage │Database│   │  │   │Storage │Database│   │                   │
+│  │   │Database│Storage │   │  │   │Database│Storage │   │                   │
 │  │   └────────┴────────┘   │  │   └────────┴────────┘   │                   │
 │  └─────────────────────────┘  └─────────────────────────┘                   │
 │                                                                              │
-│  Each environment instance provisioned independently (data isolation)        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,11 +115,10 @@
 
 | Component | Responsibility |
 |-----------|---------------|
-| **Auth Service** | JWT issuance, token validation, session management |
-| **Tenant Management** | Hospital CRUD, user management, RBAC policies |
-| **Environment Management** | Environment lifecycle, deployment orchestration |
-| **Infrastructure Provisioner** | VPC creation, DB provisioning, storage setup |
-| **Monitoring/Audit** | Centralized logging, compliance reporting |
+| **Auth Service** | JWT issuance, token validation |
+| **Tenant Management** | Hospital CRUD, user management, role assignment |
+| **Environment Management** | Environment lifecycle (create, update, delete) |
+| **Audit Service** | Log all access and changes |
 
 ---
 
@@ -136,9 +127,9 @@
 ## Tenant Management APIs
 
 ```
-POST   /api/v1/tenants                    # Onboard new hospital
+POST   /api/v1/tenants                    # Create new hospital
 GET    /api/v1/tenants/{tenant_id}        # Get hospital details
-DELETE /api/v1/tenants/{tenant_id}        # Offboard hospital (soft delete)
+DELETE /api/v1/tenants/{tenant_id}        # Delete hospital (soft delete)
 
 POST   /api/v1/tenants/{tenant_id}/users  # Add user to hospital
 PUT    /api/v1/tenants/{tenant_id}/users/{user_id}/role  # Update role
@@ -151,7 +142,6 @@ POST   /api/v1/tenants/{tenant_id}/environments           # Create environment
 GET    /api/v1/tenants/{tenant_id}/environments           # List environments
 GET    /api/v1/tenants/{tenant_id}/environments/{env_id}  # Get env details
 DELETE /api/v1/tenants/{tenant_id}/environments/{env_id}  # Delete environment
-POST   /api/v1/tenants/{tenant_id}/environments/{env_id}/clone  # Clone env
 ```
 
 ## Example: Create Environment Request
@@ -161,12 +151,7 @@ POST /api/v1/tenants/hospital_123/environments
 {
   "name": "production",
   "type": "prod",
-  "region": "us-east-1",
-  "services": ["ehr", "patient-portal", "analytics"],
-  "config": {
-    "db_size": "large",
-    "backup_enabled": true
-  }
+  "services": ["ehr", "patient-portal"]
 }
 ```
 
@@ -176,12 +161,10 @@ POST /api/v1/tenants/hospital_123/environments
 {
   "env_id": "env_abc123",
   "tenant_id": "hospital_123",
+  "name": "production",
+  "type": "prod",
   "status": "provisioning",
-  "estimated_ready": "2024-01-15T10:30:00Z",
-  "endpoints": {
-    "ehr": "pending",
-    "portal": "pending"
-  }
+  "created_at": "2024-01-15T10:00:00Z"
 }
 ```
 
@@ -193,51 +176,72 @@ POST /api/v1/tenants/hospital_123/environments
 
 ```
 ┌─────────────┐       ┌─────────────────┐       ┌─────────────┐
-│   Tenant    │1─────*│   Environment   │1─────*│    User     │
+│   Tenant    │1─────*│   Environment   │       │    User     │
 │  (Hospital) │       │                 │       │             │
 ├─────────────┤       ├─────────────────┤       ├─────────────┤
 │ tenant_id   │       │ env_id          │       │ user_id     │
 │ name        │       │ tenant_id (FK)  │       │ tenant_id   │
-│ status      │       │ type (prod/stg) │       │ email       │
-│ tier        │       │ status          │       │ role        │
-│ created_at  │       │ vpc_id          │       │ env_access[]│
-└─────────────┘       │ db_endpoint     │       └─────────────┘
-                      │ storage_bucket  │
-                      │ created_at      │
-                      └─────────────────┘
+│ status      │       │ name            │       │ email       │
+│ created_at  │       │ type            │       │ role        │
+└─────────────┘       │ status          │       └──────┬──────┘
+                      │ created_at      │              │
+                      └─────────────────┘              │
+                               ▲                       │
+                               │                       │
+                               └───────────────────────┘
+                                  user_env_access (M:M)
 ```
 
-## Token Structure (JWT)
+## Schema & Indexes
+
+**tenants**
+| Column | Type | Notes |
+|--------|------|-------|
+| tenant_id | VARCHAR | PK |
+| name | VARCHAR | Hospital name |
+| status | VARCHAR | ACTIVE, SUSPENDED, DELETED |
+| created_at | TIMESTAMP | |
+
+**environments**
+| Column | Type | Notes |
+|--------|------|-------|
+| env_id | VARCHAR | PK |
+| tenant_id | VARCHAR | FK to tenants |
+| name | VARCHAR | "production", "staging", etc. |
+| type | VARCHAR | prod, staging, dev |
+| status | VARCHAR | CREATING, ACTIVE, DELETING |
+| created_at | TIMESTAMP | |
+
+**users**
+| Column | Type | Notes |
+|--------|------|-------|
+| user_id | VARCHAR | PK |
+| tenant_id | VARCHAR | FK to tenants |
+| email | VARCHAR | |
+| role | VARCHAR | hospital_admin, env_admin, user |
+
+**user_env_access**
+| Column | Type | Notes |
+|--------|------|-------|
+| user_id | VARCHAR | PK (composite) |
+| env_id | VARCHAR | PK (composite) |
+| granted_at | TIMESTAMP | |
+
+**Indexes**
+- `environments(tenant_id)` — list environments for a hospital
+- `users(tenant_id)` — list users for a hospital
+- `user_env_access(env_id)` — list users with access to an environment
+
+## JWT Token Structure
 
 ```json
 {
-  "sub": "user_id",
+  "sub": "user_123",
   "tenant_id": "hospital_123",
-  "env_access": ["env_prod", "env_staging"],
   "role": "environment_admin",
-  "permissions": ["env:read", "env:write", "users:read"],
+  "env_access": ["env_prod", "env_staging"],
   "exp": 1234567890
 }
-```
-
-## Access Control Database
-
-```sql
--- Role definitions
-CREATE TABLE roles (
-  role_id VARCHAR PRIMARY KEY,
-  role_name VARCHAR,  -- hospital_admin, env_admin, user
-  permissions JSONB   -- ["tenant:*", "env:*", "users:*"]
-);
-
--- User-environment access mapping
-CREATE TABLE user_env_access (
-  user_id VARCHAR,
-  env_id VARCHAR,
-  granted_by VARCHAR,
-  granted_at TIMESTAMP,
-  PRIMARY KEY (user_id, env_id)
-);
 ```
 
 ---
@@ -251,7 +255,7 @@ Hospital Admin clicks "Create Environment"
         │
         ▼
 ┌─────────────────────────────────────┐
-│ 1. API Gateway receives request     │
+│ 1. API Gateway                      │
 │    - Validate JWT                   │
 │    - Check: role = hospital_admin?  │
 └──────────────────┬──────────────────┘
@@ -259,34 +263,26 @@ Hospital Admin clicks "Create Environment"
                    ▼
 ┌─────────────────────────────────────┐
 │ 2. Environment Service              │
-│    - Validate request params        │
+│    - Validate request               │
 │    - Check tenant quota             │
-│    - Create env record (PENDING)    │
-│    - Publish to provisioning queue  │
+│    - Create env record (CREATING)   │
+│    - Queue provisioning job         │
 └──────────────────┬──────────────────┘
                    │
                    ▼
 ┌─────────────────────────────────────┐
-│ 3. Infrastructure Provisioner       │
-│    - Create VPC + subnets           │
-│    - Provision RDS instance         │
-│    - Create S3 bucket               │
-│    - Deploy app containers          │
-│    - Configure security groups      │
-└──────────────────┬──────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────┐
-│ 4. Update env record (READY)        │
-│    - Store endpoints                 │
-│    - Notify admin via webhook/email │
+│ 3. Provisioner (async)              │
+│    - Create database                │
+│    - Deploy applications            │
+│    - Update status → ACTIVE         │
+│    - Notify admin                   │
 └─────────────────────────────────────┘
 ```
 
 ## 6.2 Request Authorization Flow
 
 ```
-Request: GET /api/env/env_prod_123/patients
+Request: GET /api/environments/env_prod_123/patients
 Headers: Authorization: Bearer <JWT>
         │
         ▼
@@ -296,48 +292,36 @@ Headers: Authorization: Bearer <JWT>
                    │
                    ▼
 ┌─────────────────────────────────────┐
-│ 2. Extract claims:                  │
-│    tenant_id: hospital_123          │
-│    env_access: [env_prod_123, ...]  │
-│    role: environment_admin          │
+│ 2. Extract claims from JWT:         │
+│    - tenant_id: hospital_123        │
+│    - env_access: [env_prod_123]     │
+│    - role: environment_admin        │
 └──────────────────┬──────────────────┘
                    │
                    ▼
 ┌─────────────────────────────────────┐
 │ 3. Authorization checks:            │
-│    - env_prod_123 IN env_access? ✓  │
-│    - role has patients:read? ✓      │
+│    - Is env_prod_123 in env_access? │
+│    - Does role allow this action?   │
 └──────────────────┬──────────────────┘
                    │
                    ▼
 ┌─────────────────────────────────────┐
-│ 4. Route to data plane:             │
-│    - Lookup env_prod_123 endpoint   │
-│    - Forward request to VPC         │
+│ 4. Forward to environment's         │
+│    data plane                       │
 └─────────────────────────────────────┘
 ```
 
-## 6.3 Hospital Offboarding Flow
+## 6.3 RBAC Permission Matrix
 
-```
-1. Soft Delete
-   └─► Mark tenant status = "PENDING_DELETION"
-   └─► Disable all user logins
-   └─► Stop billing
-
-2. Grace Period (30 days)
-   └─► Data export API available
-   └─► Admin can request restore
-
-3. Hard Delete
-   └─► Delete all environments (parallel)
-       ├─► Terminate compute instances
-       ├─► Delete databases (final backup first)
-       ├─► Delete storage buckets
-       └─► Delete VPCs
-   └─► Purge control plane records
-   └─► Audit log: "Tenant X fully deleted"
-```
+| Action | Hospital Admin | Env Admin | User |
+|--------|---------------|-----------|------|
+| Create environment | ✓ | ✗ | ✗ |
+| Delete environment | ✓ | ✗ | ✗ |
+| Configure environment | ✓ | ✓ | ✗ |
+| Add users to environment | ✓ | ✓ | ✗ |
+| Access environment data | ✓ | ✓ | ✓ |
+| View audit logs | ✓ | ✓ | ✗ |
 
 ---
 
@@ -347,32 +331,9 @@ Headers: Authorization: Bearer <JWT>
 
 | Bottleneck | Solution |
 |------------|----------|
-| **Provisioning queue backlog** | Multiple provisioner workers, priority queues |
+| **Auth service overload** | Cache JWT validation, distributed auth |
 | **Control plane DB** | Read replicas, connection pooling |
-| **Auth service overload** | Token caching, distributed auth |
-| **Cross-region latency** | Regional control plane deployments |
-
-## Scaling Strategy
-
-```
-                    ┌─────────────────┐
-                    │  Global LB      │
-                    └────────┬────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-         ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│ US-East Region  │ │ US-West Region  │ │ EU Region       │
-│ ┌─────────────┐ │ │ ┌─────────────┐ │ │ ┌─────────────┐ │
-│ │Control Plane│ │ │ │Control Plane│ │ │ │Control Plane│ │
-│ └─────────────┘ │ │ └─────────────┘ │ │ └─────────────┘ │
-│ ┌─────────────┐ │ │ ┌─────────────┐ │ │ ┌─────────────┐ │
-│ │Data Planes  │ │ │ │Data Planes  │ │ │ │Data Planes  │ │
-│ │(Hospitals)  │ │ │ │(Hospitals)  │ │ │ │(Hospitals)  │ │
-│ └─────────────┘ │ │ └─────────────┘ │ │ └─────────────┘ │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
-```
+| **Provisioning backlog** | Multiple workers, priority queues |
 
 ## Numbers to Know
 
@@ -382,7 +343,6 @@ Headers: Authorization: Bearer <JWT>
 | API latency (P99) | < 200ms |
 | Auth token validation | < 10ms |
 | Max environments per tenant | 10 |
-| Max tenants per region | 500 |
 
 ---
 
@@ -390,74 +350,59 @@ Headers: Authorization: Bearer <JWT>
 
 ## Key Design Tradeoffs
 
-### 1. Isolation Strategy
+### 1. Tenant Isolation Strategy
 
 | Option | Pros | Cons | Recommendation |
 |--------|------|------|----------------|
-| **Separate VPCs** | Lower cost, easier mgmt | Softer boundary | Default for most |
-| **Separate AWS Accounts** | Strongest isolation | Complex, costly | Enterprise tier |
-| **Namespace only** | Cheapest | Weak isolation | Dev/test only |
+| **Shared DB + tenant_id column** | Cheapest | Query bug = data leak | Never for healthcare |
+| **Separate schema per tenant** | Mid isolation | Migration complexity | Acceptable |
+| **Separate DB per tenant** | Best isolation | Higher cost | **Use this** |
 
-### 2. Database Strategy
-
-| Option | Pros | Cons | Recommendation |
-|--------|------|------|----------------|
-| **Shared DB + tenant_id** | Cheapest | Query bug = data leak | Never for healthcare |
-| **Separate schema** | Mid isolation | Migration pain | Acceptable |
-| **Separate DB** | Best isolation | Highest cost | **Use this** |
-
-### 3. App Deployment
+### 2. RBAC Storage
 
 | Option | Pros | Cons | Recommendation |
 |--------|------|------|----------------|
-| **Shared app** | Single deploy | Bug affects all | Not for healthcare |
-| **Dedicated per tenant** | Full isolation | Complex deploys | **Use this** |
+| **Roles in JWT** | Fast, no DB lookup | Token refresh for changes | **Use this** |
+| **Roles in DB lookup** | Always fresh | Adds latency | Only if roles change frequently |
 
-## HIPAA Compliance Checklist
+### 3. Environment Access
 
-- [ ] Encryption at rest (AES-256)
-- [ ] Encryption in transit (TLS 1.3)
-- [ ] Audit logging (all PHI access)
-- [ ] Access reviews (quarterly)
-- [ ] BAA with cloud provider
-- [ ] Backup & DR tested
-
-## SLAs
-
-| Environment | Availability | RPO | RTO |
-|-------------|--------------|-----|-----|
-| Production | 99.95% | 1 hr | 4 hr |
-| Staging | 99.5% | 24 hr | 24 hr |
-| Dev | 99% | 24 hr | 48 hr |
+| Option | Pros | Cons | Recommendation |
+|--------|------|------|----------------|
+| **List in JWT** | Fast authorization | Token size grows | **Use for <20 envs** |
+| **DB lookup** | Unlimited envs | Adds latency | Use for >20 envs |
 
 ---
 
 # Interviewer Follow-Up Questions (Prepare For)
 
-1. **"How do you handle a hospital that needs to share data across environments?"**
-   - Cross-environment data sync service with explicit grants
-   - Audit all cross-env access
+1. **"How do you prevent one tenant from accessing another's data?"**
+   - tenant_id is in JWT, checked on every request
+   - Separate databases per tenant (no shared tables)
+   - All queries scoped to tenant_id
 
-2. **"What if provisioning fails halfway through?"**
-   - Saga pattern with compensating transactions
-   - Cleanup orphaned resources, retry from checkpoint
+2. **"User's role changes. How do they get new permissions?"**
+   - Update role in DB
+   - Next token refresh (or logout/login) gets new claims
+   - For immediate effect: invalidate current tokens
 
-3. **"How do you handle noisy neighbor in shared control plane?"**
-   - Rate limiting per tenant
-   - Priority queues for paid tiers
-   - Auto-scaling based on queue depth
+3. **"How do you handle a user who needs access to multiple environments?"**
+   - env_access array in JWT lists all accessible environments
+   - user_env_access table tracks the M:M relationship
+   - Hospital admin grants/revokes access
 
-4. **"What about disaster recovery?"**
-   - Cross-region replication for control plane
-   - Per-tenant backup policies in data plane
-   - Annual DR drills
+4. **"What happens when you delete an environment?"**
+   - Soft delete first (status = DELETING)
+   - Remove user access mappings
+   - Queue async cleanup of resources
+   - Audit log the deletion
 
 ---
 
 # Summary: What Makes This Design Strong
 
-1. **Clear separation**: Control plane (shared) vs Data plane (isolated)
-2. **Defense in depth**: Network + DB + app isolation for healthcare
-3. **Scalable**: Horizontal scaling at each layer
-4. **Compliant**: HIPAA requirements baked into design
-5. **Operationally sound**: Clear provisioning and offboarding flows
+1. **Clear data model**: Tenant → Environment → User hierarchy
+2. **Simple RBAC**: Three roles with clear permission boundaries
+3. **JWT-based auth**: Fast authorization without DB lookups
+4. **Tenant isolation**: Separate databases, tenant_id in every request
+5. **Audit trail**: All access logged for compliance
